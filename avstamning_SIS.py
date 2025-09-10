@@ -1026,3 +1026,64 @@ def main():
 
 if __name__ == "__main__":
     main()
+# === Pipeline för webben: returnerar en XLSX som bytes ===
+from pathlib import Path
+import tempfile
+import pandas as pd
+
+def build_output_excel_bytes(bank_path: str, bokf_path: str) -> bytes:
+    # 1) Läs källor
+    bank_all = load_bank(bank_path)
+    bokf_all = load_bokf(bokf_path)
+
+    # 2) Kör K1–K5N i samma ordning som i main()
+    bank_rem = bank_all.copy()
+    bokf_rem = bokf_all.copy()
+    matched_bank_list, matched_bokf_list = [], []
+
+    for func in [
+        run_category1_BG04803458,
+        run_category2_BG04868550,
+        run_category3_35ref,
+        run_category4_ovrigt,
+        run_category4N_valuta_multi,      # K4N
+        run_category5_LB,                 # K5
+        run_category5N_global_balance,    # K5N
+    ]:
+        mb, mf = func(bank_rem, bokf_rem)
+        if not mb.empty:
+            matched_bank_list.append(mb)
+            bank_rem = bank_rem[~bank_rem["BankRowID"].isin(mb["BankRowID"])]
+        if not mf.empty:
+            matched_bokf_list.append(mf)
+            bokf_rem = bokf_rem[~bokf_rem["BokfRowID"].isin(mf["BokfRowID"])]
+
+    # 3) K6 (symmetrisk) på rester
+    mb6, mf6 = run_category6_symmetric(bank_rem, bokf_rem)
+    if not mb6.empty: matched_bank_list.append(mb6)
+    if not mf6.empty: matched_bokf_list.append(mf6)
+
+    # 4) Slå ihop matchat
+    matched_bank_all = pd.concat(matched_bank_list, ignore_index=True) if matched_bank_list else bank_all.iloc[0:0].copy()
+    matched_bokf_all = pd.concat(matched_bokf_list, ignore_index=True) if matched_bokf_list else bokf_all.iloc[0:0].copy()
+
+    # 5) Bygg mapping ENBART från __GroupKey__ (samma princip som i main())
+    mapping_bank, mapping_bokf = {}, {}
+    if "__GroupKey__" in matched_bank_all.columns:
+        for gkey, grp in matched_bank_all.dropna(subset=["__GroupKey__"]).groupby("__GroupKey__"):
+            for bid in grp.get("BankRowID", []):
+                mapping_bank[bid] = (grp.get("__MatchKategori__").iloc[0] if "__MatchKategori__" in grp.columns and not grp["__MatchKategori__"].empty else "", gkey)
+    if "__GroupKey__" in matched_bokf_all.columns:
+        for gkey, grp in matched_bokf_all.dropna(subset=["__GroupKey__"]).groupby("__GroupKey__"):
+            for fid in grp.get("BokfRowID", []):
+                mapping_bokf[fid] = (grp.get("__MatchKategori__").iloc[0] if "__MatchKategori__" in grp.columns and not grp["__MatchKategori__"].empty else "", gkey)
+
+    # 6) Bygg “Kombinerad” och formatera → bytes
+    komb = build_combined_all(bank_all, bokf_all, mapping_bank, mapping_bokf)
+
+    with tempfile.TemporaryDirectory() as td:
+        out_path = Path(td) / "output_avstamning.xlsx"
+        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+            komb.to_excel(xw, index=False, sheet_name="Kombinerad", startrow=3)
+        make_combined_sheet(out_path)
+        return out_path.read_bytes()

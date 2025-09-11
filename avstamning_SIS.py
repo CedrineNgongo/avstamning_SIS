@@ -1087,3 +1087,12 @@ def build_output_excel_bytes(bank_path: str, bokf_path: str) -> bytes:
             komb.to_excel(xw, index=False, sheet_name="Kombinerad", startrow=3)
         make_combined_sheet(out_path)
         return out_path.read_bytes()
+
+
+# ===================== STREAMLIT-SAFE GUARD =====================
+# Den här filen är avsedd att importeras från Streamlit och anropa
+# build_output_excel_bytes(...). Det finns ingen GUI/input-körning här.
+if __name__ == "__main__":
+    # Om du kör denna fil direkt, skriv bara en kort instruktion.
+    print("Den här modulen innehåller bara pipeline-funktionen 'build_output_excel_bytes'.\n"
+          "Importera den från din Streamlit-app och anropa funktionen med filvägar.")
